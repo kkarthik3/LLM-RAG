@@ -116,8 +116,8 @@ def chat_pdf():
                     get_vector_store(text_chunks)
                     st.success("the task is now complete 🎉🌟")
                     
-        st.divider()
-        st.caption("By Karthikeyan 🔥")
+            st.divider()
+            st.caption("By Karthikeyan 🔥")
 
 
 
