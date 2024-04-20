@@ -6,16 +6,18 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_experimental.agents.agent_toolkits import create_pandas_dataframe_agent
 from pandasai import SmartDataframe
 import shutil
+from langchain_google_genai import GoogleGenerativeAI
 import matplotlib.pyplot as plt
 import matplotlib
 # matplotlib.use("Agg") 
 st.set_option('deprecation.showPyplotGlobalUse', False)
-
-
 import textwrap
 from IPython.display import display
 from IPython.display import Markdown
 
+def to_markdown(text):
+    text = text.replace('•', '  *')
+    return Markdown(textwrap.indent(text, '> ', predicate=lambda _: True))
 
 def chat_csv():
     def get_image_filename(directory):
@@ -24,16 +26,12 @@ def chat_csv():
             return image_files[0]  # Return the first image file found
         else:
             return None
+    
         
     load_dotenv()
-    #st.set_page_config(page_title="MRI Image Super Resolution", layout="wide")
-
     llm = ChatGoogleGenerativeAI(model="models/gemini-pro", google_api_key=os.getenv("google_api_key"),
-                                temperature=1,convert_system_message_to_human=True)
+                                 temperature=1,convert_system_message_to_human=True)
 
-    def to_markdown(text):
-        text = text.replace('•', '  *')
-        return Markdown(textwrap.indent(text, '> ', predicate=lambda _: True))
 
     st.title("Chat With Your Dataset 📝🗣️💬")
     st.header("Exploratory Data Analysis 🔎📉📊")
@@ -60,7 +58,7 @@ def chat_csv():
 
                     with st.expander("Steps of EDA"):
                         eda = llm.invoke("What are the steps of EDA")
-                        st.write(eda.content)
+                        st.write(eda)
 
         # Add reset cache button
         st.sidebar.button("Refresh",on_click=clear_cache)
@@ -78,14 +76,15 @@ def chat_csv():
         return
 
 
-    prompt = "Don't provide python or any form of codes"
+    prompt = "using python_repl_ast"
     @st.cache_data
     def function_agent1():
         st.subheader("Data Overview")
         st.write("The sample of the dataset Look like This")
         st.write(st.session_state.df.sample(5))
         st.subheader("Meaning of the coloumns")
-        st.write(agent.run("What are the meaning of the columns tells about the dataset explain them in order by order"+prompt))
+        q1 = agent.run("what is meaning of the coloumns explain each of them?"+prompt)
+        st.write(q1)
         st.subheader("Missing values")
         st.write(agent.run("How many missing values does this dataframe have? if yes Start the answer with 'There are'"+prompt))
         st.subheader("Duplpicate Values")
@@ -101,7 +100,7 @@ def chat_csv():
         st.subheader("Outlier analysis")
         st.write(agent.run("Identify outliers in the data that may be erroneous or that may have a significant impact on the analysis."+prompt))
         st.subheader("Feature Engineering")
-        st.write(agent.run("What new features would be interesting to create?, and how to create that and tell the logic behind them."+prompt))
+        st.write(agent.run("What are the differnet new features would be interesting to create from the data?and tell logic behind to create them"+prompt))
         return
 
 
@@ -126,8 +125,8 @@ def chat_csv():
             if os.path.exists(image_path):
                 os.remove(image_path)
         if query:
-            df2.chat(query)
-            st.pyplot()
+            #df2.chat(query)
+            st.pyplot(df2.chat(query))
             # image_filename = get_image_filename(file_path)
             # if image_filename:
             #     image_path = os.path.join(file_path, image_filename)
@@ -138,7 +137,7 @@ def chat_csv():
 
     # main
     if 'df' in st.session_state:
-        agent = create_pandas_dataframe_agent(llm=llm, df=st.session_state.df,agent_type="openai-tools",verbose = True)
+        agent = create_pandas_dataframe_agent(llm=llm, df=st.session_state.df,agent_executor_kwargs={"handle_parsing_errors": True},verbose=True)
         function_agent1()
         function_agent2()
         st.divider()

@@ -4,37 +4,60 @@ import streamlit as st
 from PyPDF2 import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import os
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
 import google.generativeai as genai
 from langchain_community.vectorstores import FAISS
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.chains.question_answering import load_qa_chain
 from langchain.prompts import PromptTemplate
+from langchain.chains.question_answering import load_qa_chain
 from dotenv import load_dotenv
-
+from langchain.agents import AgentType
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
 import pickle
-from langchain_google_genai import GoogleGenerativeAI
 from langchain_community.document_loaders import SeleniumURLLoader
 import time
-
+from langchain_community.llms import HuggingFaceHub
+from langchain_community.chat_models import BedrockChat
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_experimental.agents.agent_toolkits import create_pandas_dataframe_agent
 from pandasai import SmartDataframe
 import pandas as pd
-import textwrap
-from IPython.display import display
-from IPython.display import Markdown
-st.set_option('deprecation.showPyplotGlobalUse', False)
+from pandasai.responses.response_parser import ResponseParser
+from langchain_community.utilities import SQLDatabase
+from langchain_core.prompts import ChatPromptTemplate
+import io
+import csv
 
-st.set_page_config("RAG with Large Language Models",layout="wide",page_icon="robot")
+# st.set_option('deprecation.showPyplotGlobalUse', False)
+
+st.set_page_config("RAG with Large Language Models",layout="wide",page_icon="🤖")
 
 
 load_dotenv()
-genai.configure(api_key=os.getenv("google_api_key"))
 
-selected2 = option_menu(None, ["Home", "CSV", "Web", 'PDF', "JSON"], 
-    icons=['house', 'table', "globe", 'file-pdf',"filetype-json"], 
+
+
+
+selected2 = option_menu(None, ["Home", "CSV", "Web", 'PDF', "JSON", "DataBase"], 
+    icons=['house', 'table', "globe", 'file-pdf',"filetype-json","database-fill"], 
     menu_icon="cast", default_index=0, orientation="horizontal")
 
+
+class StreamlitResponse(ResponseParser):
+    def __init__(self, context) -> None:
+        super().__init__(context)
+
+    def format_dataframe(self, result):
+        st.dataframe(result["value"])
+        return
+
+    def format_plot(self, result):
+        st.image(result["value"])
+        return
+
+    def format_other(self, result):
+        st.write(result["value"])
+        return
 
 def chat_pdf():
     def get_pdf_text(pdf_docs):
@@ -54,7 +77,7 @@ def chat_pdf():
 
 
     def get_vector_store(text_chunks):
-        embeddings = GoogleGenerativeAIEmbeddings(model = "models/embedding-001")
+        embeddings = HuggingFaceEmbeddings(model_name='sentence-transformers/all-MiniLM-L6-v2', model_kwargs={'device': 'cpu'})
         vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
         vector_store.save_local("faiss_index")
 
@@ -62,38 +85,34 @@ def chat_pdf():
     def get_conversational_chain():
 
         prompt_template = """
-        Answer the question as detailed as possible from the provided context, make sure to provide all the details, if the answer is not in
+        Answer the question as detailed as possible from the provided context and your existing knowledge. Provide helpful, accurate, and engaging answers make sure to provide all the details, if the answer is not in
         provided context just say, "answer is not available in the context", don't provide the wrong answer\n\n
         Context:\n {context}?\n
         Question: \n{question}\n
-
         Answer:
         """
-
-        model = ChatGoogleGenerativeAI(model="gemini-pro",temperature=0.3)
-
+        model = HuggingFaceHub(repo_id="mistralai/Mixtral-8x7B-Instruct-v0.1", model_kwargs={"temperature": 0.5})
         prompt = PromptTemplate(template = prompt_template, input_variables = ["context", "question"])
-        chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
 
-        return chain
-
+        return prompt, model
 
     def user_input(user_question):
-        embeddings = GoogleGenerativeAIEmbeddings(model = "models/embedding-001")
+        embeddings = HuggingFaceEmbeddings(model_name='sentence-transformers/all-MiniLM-L6-v2', model_kwargs={'device': 'cpu'})
         
-        new_db = FAISS.load_local("faiss_index", embeddings)
-        docs = new_db.similarity_search(user_question)
-
-        chain = get_conversational_chain()
-
         
-        response = chain(
-            {"input_documents":docs, "question": user_question}
-            , return_only_outputs=True)
+        new_db = FAISS.load_local("faiss_index", embeddings,allow_dangerous_deserialization=True)
+        retriever = new_db.as_retriever(search_kwargs = {"k": 5})
 
-        print(response)
-        st.subheader("Reply: ")
-        st.markdown(f"<span style='font-size:20px'>{response['output_text']}</span>", unsafe_allow_html=True)
+        prompt,model = get_conversational_chain()
+
+        rag_chain = (
+        {"context": retriever, "question": RunnablePassthrough()}
+        | prompt
+        | model
+        | StrOutputParser())
+        with st.spinner():
+            st.subheader("The Answer is")
+            st.markdown(f"<div style='background-color:#183c2c; padding: 10px; border-radius: 5px;'><span style='font-size:20px;'>{rag_chain.invoke(user_question)}</span></div>", unsafe_allow_html=True)
 
 
 
@@ -108,10 +127,10 @@ def chat_pdf():
 
         with st.sidebar:
             st.subheader("Upload your PDF Files and Click on the Submit & Process Button...📄💻🔄")
-            pdf_docs = st.file_uploader("", accept_multiple_files=True)
+            st.session_state.pdf_docs = st.file_uploader("", accept_multiple_files=True)
             if st.button("Submit & Process"):
                 with st.spinner("Processing...🔄🔄"):
-                    raw_text = get_pdf_text(pdf_docs)
+                    raw_text = get_pdf_text( st.session_state.pdf_docs)
                     text_chunks = get_text_chunks(raw_text)
                     get_vector_store(text_chunks)
                     st.success("the task is now complete 🎉🌟")
@@ -142,8 +161,8 @@ def hyperlink():
     file_path = "Link DB/faiss_store_openai.pkl"
 
     main_placeholder = st.empty()
-    llm = GoogleGenerativeAI(model="models/text-bison-001", google_api_key=os.getenv("google_api_key"),temperature=0.8)
-
+    llm = HuggingFaceHub(repo_id="mistralai/Mixtral-8x7B-Instruct-v0.1", model_kwargs={"temperature": 0.5})
+    
     if process_url_clicked:
         # load data
         loader = SeleniumURLLoader(urls=urls)
@@ -157,7 +176,7 @@ def hyperlink():
         main_placeholder.subheader("The commencement of the Text Splitter's operation has been initiated...📜✂️🌟")
         docs = text_splitter.split_documents(data)
         # create embeddings and save it to FAISS index
-        embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+        embeddings = HuggingFaceEmbeddings(model_name='sentence-transformers/all-MiniLM-L6-v2', model_kwargs={'device': 'cpu'})
         vectorstore_openai = FAISS.from_documents(docs, embeddings)
         main_placeholder.subheader("The construction of the embedding vector has commenced...🌟🔨🚀")
         with st.sidebar:
@@ -170,13 +189,12 @@ def hyperlink():
 
 
     prompt_template = """
-        Answer the question as detailed as possible from the provided context, make sure to provide all the details, if the answer is not in
-        provided context just say, "answer is not available in the context", don't provide the wrong answer\n\n
-        Context:\n {context}?\n
-        Question: \n{question}\n
-
-        Answer:
-        """
+    Answer the question as detailed as possible from the provided context and your existing knowledge. Provide helpful, accurate, and engaging answers make sure to provide all the details, if the answer is not in
+    provided context just say, "answer is not available in the context", don't provide the wrong answer\n\n
+    Context:\n {context}?\n
+    Question: \n{question}\n
+    Answer:
+    """
 
     query = main_placeholder.text_input("Question: ")
     if query:
@@ -187,18 +205,10 @@ def hyperlink():
                 prompt = PromptTemplate(template =prompt_template, input_variables = ["context", "question"])
                 chain = load_qa_chain(llm=llm, chain_type="stuff", prompt=prompt)
                 result = chain({"input_documents":db, "question": query}, return_only_outputs=True)
+                result = result["output_text"]
                 # result will be a dictionary of this format --> {"answer": "", "sources": [] }
                 st.header("Answer")
-                st.markdown(f"<span style='font-size:17px'>{result['output_text']}</span>", unsafe_allow_html=True)
-                
-            
-                sources = result.get("sources", "")
-            
-                if sources:
-                    st.subheader("Sources:")
-                    sources_list = sources.split("\n")  # Split the sources by newline
-                    for source in sources_list:
-                        st.write(source)
+                st.markdown(f"<div style='background-color:#183c2c; padding: 10px; border-radius: 5px;'><span style='font-size:20px;'>{result}</span></div>", unsafe_allow_html=True)
 
 
 def chat_csv():
@@ -210,14 +220,11 @@ def chat_csv():
             return None
         
     load_dotenv()
-    #st.set_page_config(page_title="MRI Image Super Resolution", layout="wide")
 
-    llm = ChatGoogleGenerativeAI(model="models/gemini-pro", google_api_key=os.getenv("google_api_key"),
+    llm = ChatGoogleGenerativeAI(model="models/gemini-pro", google_api_key=st.session_state.gemini,
                                 temperature=1,convert_system_message_to_human=True)
 
-    def to_markdown(text):
-        text = text.replace('•', '  *')
-        return Markdown(textwrap.indent(text, '> ', predicate=lambda _: True))
+
 
     st.title("Chat With Your Dataset 📝🗣️💬")
     st.header("Exploratory Data Analysis 🔎📉📊")
@@ -225,6 +232,7 @@ def chat_csv():
     # Reset cache function
     def clear_cache():
         st.cache_data.clear()
+        st.session_state.clear()
 
     with st.sidebar:
         st.title("Your AI Assistant here 🤖🦾")
@@ -239,7 +247,7 @@ def chat_csv():
             with st.spinner("Processing..."):
                 if csv is not None:
                     csv.seek(0)
-                    df = pd.read_csv(csv, low_memory=False, encoding='latin-1')
+                    df = pd.read_csv(csv)
                     st.session_state.df = df
 
                     with st.expander("Steps of EDA"):
@@ -269,9 +277,9 @@ def chat_csv():
         st.write("The sample of the dataset Look like This")
         st.write(st.session_state.df.sample(5))
         st.subheader("Meaning of the coloumns")
-        st.write(agent.run("What are the meaning of the columns tells about the dataset explain them in order by order"+prompt))
+        st.write(agent.run("What are the meaning of the columns tells about the dataset explain all of them"+prompt))
         st.subheader("Missing values")
-        st.write(agent.run("How many missing values does this dataframe have? if yes Start the answer with 'There are'"+prompt))
+        st.write(agent.run("How many missing values does this dataframe have? if yes Start the answer with 'There are'"))
         st.subheader("Duplpicate Values")
         st.write(agent.run("Are there any duplicate values and if yes what are the most duplicate entries?, if yes show in order"+prompt))
         return
@@ -281,11 +289,11 @@ def chat_csv():
         st.subheader("Data Summarization")
         st.write(st.session_state.df.describe())
         st.subheader("Correlation Analysis")
-        st.write(df2.chat("Calculate correlations between numerical variables to identify potential relationships. and don't include Nan values, i dont wnat ay python codes"))
+        st.write(agent.run("Calculate correlations between numerical variables to identify potential relationships. and don't include Nan values, i dont wnat ay python codes"))
         st.subheader("Outlier analysis")
         st.write(agent.run("Identify outliers in the data that may be erroneous or that may have a significant impact on the analysis."+prompt))
         st.subheader("Feature Engineering")
-        st.write(agent.run("What new features would be interesting to create?, and how to create that and tell the logic behind them."+prompt))
+        st.write(agent.run("if there are any possible additional features that could be derived from the existing data. Furthermore, explain the underlying logic behind the creation of these potential features"))
         return
 
 
@@ -303,27 +311,15 @@ def chat_csv():
     
 
     def plot(query):
-        file_path = r"exports\charts"
-        image_filename = get_image_filename(file_path)
-        if image_filename:
-            image_path = os.path.join(file_path, image_filename)
-            if os.path.exists(image_path):
-                os.remove(image_path)
         if query:
             df2.chat(query)
-            st.pyplot()
-            # image_filename = get_image_filename(file_path)
-            # if image_filename:
-            #     image_path = os.path.join(file_path, image_filename)
-            #     if image_path:
-            #         st.image(image_path)
         return
 
 
     # main
     if 'df' in st.session_state:
-        agent = create_pandas_dataframe_agent(llm=llm, df=st.session_state.df,agent_type="openai-tools",verbose = True)
-        df2 = SmartDataframe(df=st.session_state.df, config={"llm": llm,"open_charts":False,"save_charts":True})
+        agent = create_pandas_dataframe_agent(llm=llm, df=st.session_state.df,verbose = True,agent_type=AgentType.OPENAI_FUNCTIONS,agent_executor_kwargs={'handle_parsing_errors': True})
+        df2 = SmartDataframe(df=st.session_state.df, config={"llm": llm,"open_charts":False,"save_charts":True,"response_parser": StreamlitResponse})
         function_agent1()
         function_agent2()
         st.divider()
@@ -337,20 +333,9 @@ def chat_json():
     load_dotenv()
     #st.set_page_config(page_title="MRI Image Super Resolution", layout="wide")
 
-    llm = ChatGoogleGenerativeAI(model="models/gemini-pro", google_api_key=os.getenv("google_api_key"),
+    llm = ChatGoogleGenerativeAI(model="models/gemini-pro", google_api_key=st.session_state.gemini,
                                 temperature=1,convert_system_message_to_human=True)
 
-
-    def get_image_filename(directory):
-        image_files = [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f)) and f.endswith(('.png', '.jpg', '.jpeg'))]
-        if image_files:
-            return image_files[0]  # Return the first image file found
-        else:
-            return None
-
-    def to_markdown(text):
-        text = text.replace('•', '  *')
-        return Markdown(textwrap.indent(text, '> ', predicate=lambda _: True))
 
     st.title("Chat With Your Json File 📝🗣️💬")
 
@@ -392,9 +377,131 @@ def chat_json():
 
 
 
+def Chat_db():
+
+    def init_database(user: str, password: str, host: str, port: str, database: str) :
+        db_uri = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
+        db = SQLDatabase.from_uri(db_uri)
+        return db
+    
+    llm = ChatGoogleGenerativeAI(model="models/gemini-pro", google_api_key=st.session_state.gemini,
+                                temperature=1,convert_system_message_to_human=True)
+
+    def get_query(db):
+        template = """I want you to act as a sql developor and coder who write sql queries without syntax error. My first request is "I need you to create a sql query with syntax error". My first suggestion is "You should write a query with a syntax error."
+        Based on the table schema below, write a SQL query that would answer the user's question:
+        if multiple queries are there write only one single SQL Query without syntax error not anything else
+        {schema}
+
+        Write only the SQL query and nothing else. Do not wrap the SQL query in any other text, not even backticks.
+
+        eg query to write and dont use the back slash(\) anywhere else
+        'SELECT COUNT(*) FROM t_shirts;'
+        not like this 
+        'SELECT COUNT(\\*) FROM t\\_shirts;' 
+        Question: {question}
+
+        Question: {question}
+        SQL Query:
+        """
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", "Given an input question, convert it to a SQL query. No pre-amble."),
+                ("human", template),
+            ]
+        )
+
+        def get_schema(_):
+            return db.table_info.replace('/*', '').replace('*/', '').replace('\n\n', '\n').replace("\n","").replace("\\","").replace("\t","").replace("\\","")
+
+        sql_response = (
+            RunnablePassthrough.assign(schema=get_schema)
+            | prompt
+            | llm
+            | StrOutputParser()
+        )
+        return sql_response
+
+
+    def answering(user_question,db):
+        template = """You are a data analyst at a company. You are interacting with a user who is asking you questions about the company's database.
+        Based on the table schema below, question, sql query, and sql response, write a natural language response.:
+        {schema}
+
+        Question: {question}
+        SQL Query: {query}
+        SQL Response: {response}"""
+        sql_response = get_query(db)
+        prompt_response = ChatPromptTemplate.from_template(template)
+
+        full_chain = (RunnablePassthrough.assign(query=sql_response).assign(
+            schema=lambda _: db.get_table_info(),
+            response=lambda vars:db.run(vars["query"]),
+        )
+        | prompt_response
+        | llm
+        )
+
+        response = full_chain.invoke({"question": user_question}).content
+        return response
+
+    def str_csv(data):
+        rows = data.strip('[]()\n').split('), (')
+        csv_data = io.StringIO()
+        csv_writer = csv.writer(csv_data)
+        for row in rows:
+            csv_writer.writerow(row.split(', '))
+        csv_data.seek(0)
+        df = pd.read_csv(csv_data,index_col=None)
+        return df
+
+    with st.sidebar:
+        st.subheader("Set Your Database Configurations")
+        
+        host = st.text_input("Host", value="localhost", key="Host")
+        port = st.text_input("Port", value="3306", key="Port")
+        user = st.text_input("User", value="root", key="User")
+        password = st.text_input("Password", type="password", value="admin", key="Password")
+        database = st.text_input("Database", value="atliq_tshirts", key="Database")
+        
+        if st.button("Connect"):
+            with st.spinner("Connecting to database..."):
+                st.session_state.db = init_database(user, password, host, port, database)
+                if st.session_state.db:
+                    st.success("Connected to database! 🎉🎉")
+        
+        def clear_cache():
+            st.session_state.clear()
+        st.sidebar.button("Refresh",on_click=clear_cache)
+        st.divider()
+        st.write("Made By Karthikeyan K")
+
+
+
+
+
+    if 'db' in st.session_state:
+        Query = st.text_input("Enter the Qeuries or Question from Your Database:")
+        if Query :
+            with st.spinner("The SQL Query for your prompt is loading...."):
+                sql_query = get_query(st.session_state.db)
+                sql_response = sql_query.invoke({"question": f"{Query}"})
+                st.markdown(f"<div style='background-color:#183c2c; padding: 10px; border-radius: 5px;'><span style='font-size:20px;'>{sql_response} </span></div>", unsafe_allow_html=True)
+            with st.spinner("The Data is loading ...."):
+                data = st.session_state.db.run(f"{sql_response}")
+                st.dataframe(str_csv(data))
+            with st.spinner("Your Query is Performing"):
+                response  = answering(Query, st.session_state.db)
+                st.markdown(f"<div style='background-color:#183c2c; padding: 10px; border-radius: 5px;'><span style='font-size:20px;'>{response}</span></div>", unsafe_allow_html=True)
+
+
+
 def home():
     import streamlit as st
 
+    with st.expander("Enter Your API Credentials"):
+        st.session_state.gemini = st.text_input("Enter Gemini API key to Proceed",type="password")
+        st.session_state.Huggingface = st.text_input("Enter Hugging face API key to Proceed",type="password")
     st.write("""
     <style>
     .center {
@@ -419,13 +526,22 @@ def home():
     st.image("LLM.jpg")
 
 
-if selected2 == "PDF":
-    chat_pdf()
-elif selected2 == "Web":
-    hyperlink()
-elif selected2 =="CSV":
-    chat_csv()
-elif selected2 == "JSON":
-    chat_json()
-elif selected2 == "Home":
+
+if selected2 == "Home":
     home()
+
+if st.session_state.gemini and st.session_state.Huggingface:
+    os.environ["HUGGINGFACEHUB_API_TOKEN"] = st.session_state.Huggingface
+    genai.configure(api_key=st.session_state.gemini)
+    if  selected2 == "PDF":
+        chat_pdf()
+    elif selected2 == "Web":
+        hyperlink()
+    elif selected2 =="CSV":
+        chat_csv()
+    elif selected2 == "JSON":
+        chat_json()
+    elif selected2 == "DataBase":
+        Chat_db()
+else:
+    st.warning("Please Provide API keys to procees",icon="⚠️")
