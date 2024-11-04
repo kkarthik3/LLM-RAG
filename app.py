@@ -278,8 +278,8 @@ def chat_csv():
         st.write(st.session_state.df.sample(5))
         st.subheader("Meaning of the coloumns")
         st.write(agent.run("What are the meaning of the columns tells about the dataset explain all of them"+prompt))
-        st.subheader("Missing values")
-        st.write(agent.run("How many missing values does this dataframe have? if yes Start the answer with 'There are'"))
+        # st.subheader("Missing values")
+        # st.write(agent.run("How many missing values does this dataframe have? if yes Start the answer with 'There are'"))
         st.subheader("Duplpicate Values")
         st.write(agent.run("Are there any duplicate values and if yes what are the most duplicate entries?, if yes show in order"+prompt))
         return
@@ -288,12 +288,12 @@ def chat_csv():
     def function_agent2():   
         st.subheader("Data Summarization")
         st.write(st.session_state.df.describe())
-        st.subheader("Correlation Analysis")
-        st.write(agent.run("Calculate correlations between numerical variables to identify potential relationships. and don't include Nan values, i dont wnat ay python codes"))
+        # st.subheader("Correlation Analysis")
+        # st.write(agent.run("Calculate correlations between numerical variables to identify potential relationships. and don't include Nan values, i dont wnat ay python codes"))
         st.subheader("Outlier analysis")
         st.write(agent.run("Identify outliers in the data that may be erroneous or that may have a significant impact on the analysis."+prompt))
-        st.subheader("Feature Engineering")
-        st.write(agent.run("if there are any possible additional features that could be derived from the existing data. Furthermore, explain the underlying logic behind the creation of these potential features"))
+        # st.subheader("Feature Engineering")
+        # st.write(agent.run("if there are any possible additional features that could be derived from the existing data. Furthermore, explain the underlying logic behind the creation of these potential features"))
         return
 
 

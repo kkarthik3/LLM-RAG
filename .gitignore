@@ -1,1 +1,7 @@
 /.env
+/mainpro
+/pandasai.log
+/exports
+/cache
+/faiss_index
+/Link DB
